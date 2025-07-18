@@ -146,12 +146,14 @@ class SupporterExtractor:
             print(f"  실제 데이터: {len(df)}행")
             
             # 모든 컬럼 출력 (디버깅용)
-            print(f"  모든 컬럼: {list(df.columns)[:15]}...")  # 처음 15개만 출력
+            print(f"  모든 컬럼: {list(df.columns)}")
             
-            # 핵심 컬럼 찾기
+            # 핵심 컬럼 찾기 (수정된 부분)
             core_columns = {}
             for col in df.columns:
                 col_str = str(col).lower()
+                print(f"  컬럼 검사: '{col}' -> '{col_str}'")  # 디버깅 출력
+                
                 if '상태' in col_str:
                     core_columns['status'] = col
                 elif '이름' in col_str:
@@ -168,10 +170,25 @@ class SupporterExtractor:
                     core_columns['first_date'] = col
                 elif '납입' in col_str and '개월' in col_str:
                     core_columns['payment_months'] = col
-                elif ('월납입' in col_str or '약정금액' in col_str) and '납입' not in col_str:
-                    core_columns['amount'] = col
+                # 월납입약정금액 컬럼 찾기 로직 수정
+                elif ('월납입' in col_str or '약정금액' in col_str or '금액' in col_str) and 'amount' not in core_columns:
+                    # 일시후원 관련 컬럼은 제외
+                    if '일시' not in col_str and '단발' not in col_str:
+                        core_columns['amount'] = col
+                        print(f"    ✅ 금액 컬럼 발견: {col}")
             
             print(f"  핵심 컬럼 매핑: {core_columns}")
+            
+            # 금액 컬럼이 없는 경우 모든 컬럼을 다시 확인
+            if 'amount' not in core_columns:
+                print("  ⚠️ 금액 컬럼을 찾지 못했습니다. 모든 컬럼을 재검사합니다.")
+                for col in df.columns:
+                    col_str = str(col).lower()
+                    if '금액' in col_str or '원' in col_str or 'amount' in col_str:
+                        print(f"    금액 관련 컬럼 후보: {col}")
+                        if 'amount' not in core_columns:
+                            core_columns['amount'] = col
+                            print(f"    ✅ 금액 컬럼으로 설정: {col}")
             
             if 'status' not in core_columns:
                 print("  ❌ '상태' 컬럼을 찾을 수 없습니다")
@@ -213,10 +230,12 @@ class SupporterExtractor:
                     if pd.notna(months_val) and str(months_val).strip() != 'nan':
                         payment_months = str(months_val).strip()
                 
-                # 월 납입 약정금액
+                # 월 납입 약정금액 (수정된 부분)
                 amount = ''
                 if 'amount' in core_columns:
-                    amount = self.clean_amount(row.get(core_columns['amount'], ''))
+                    amount_val = row.get(core_columns['amount'], '')
+                    amount = self.clean_amount(amount_val)
+                    print(f"    이름: {name}, 원본 금액: {amount_val}, 정리된 금액: {amount}")  # 디버깅
                 
                 supporter_data = {
                     '유형': supporter_type,

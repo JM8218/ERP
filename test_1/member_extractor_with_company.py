@@ -6,11 +6,11 @@ import os
 import re
 from datetime import datetime
 
-class MemberExtractor:
-    """조합원 명부에서 특정 데이터만 추출"""
+class MemberExtractorWithCompany:
+    """조합원 명부에서 기업명을 포함한 특정 데이터만 추출"""
     
     def __init__(self):
-        print("📊 조합원 데이터 추출기 초기화")
+        print("👥 조합원 데이터 추출기 (기업명 포함) 초기화")
         
     def find_data_start_row(self, df, expected_columns):
         """실제 데이터가 시작되는 행 찾기"""
@@ -58,8 +58,6 @@ class MemberExtractor:
             
             # 숫자인 경우 (Excel 시리얼 날짜)
             if isinstance(date_val, (int, float)):
-                # Excel 시리얼 날짜를 pandas datetime으로 변환
-                # Excel 기준일: 1900-01-01 (하지만 Excel은 1900-01-00부터 시작)
                 if 1 <= date_val <= 99999:  # 합리적인 범위 체크
                     excel_date = pd.to_datetime('1899-12-30') + pd.Timedelta(days=date_val)
                     return excel_date.strftime('%Y-%m-%d')
@@ -88,8 +86,16 @@ class MemberExtractor:
         
         return str(date_val).strip()
     
-    def extract_member_data(self, file_path):
-        """조합원 명부에서 데이터 추출"""
+    def clean_company_name(self, company):
+        """기업명 정리"""
+        if pd.isna(company) or str(company).strip() == '' or str(company) == 'nan':
+            return ''
+        
+        company_str = str(company).strip()
+        return company_str
+    
+    def extract_member_data_with_company(self, file_path):
+        """조합원 명부에서 기업명을 포함한 데이터 추출"""
         print(f"\n📊 조합원 명부 데이터 추출: {file_path}")
         
         try:
@@ -97,8 +103,8 @@ class MemberExtractor:
             df = pd.read_excel(file_path, header=None)
             print(f"  원본 크기: {len(df)}행 x {len(df.columns)}열")
             
-            # 예상 컬럼들
-            expected_columns = ['연번', '상태', '이름', '연락처', '구분', '이메일', '가입일']
+            # 예상 컬럼들 (기업명 포함)
+            expected_columns = ['연번', '상태', '이름', '연락처', '이메일', '구분', '분야', '기업', '단체']
             
             # 실제 데이터 시작 행 찾기
             data_start_row = self.find_data_start_row(df, expected_columns)
@@ -114,7 +120,7 @@ class MemberExtractor:
             # 모든 컬럼 출력 (디버깅용)
             print(f"  모든 컬럼: {list(df.columns)}")
             
-            # 핵심 컬럼 찾기
+            # 핵심 컬럼 찾기 (기업명 포함)
             core_columns = {}
             for col in df.columns:
                 col_str = str(col).lower()
@@ -124,17 +130,22 @@ class MemberExtractor:
                     core_columns['name'] = col
                 elif '연락처' in col_str or '전화' in col_str:
                     core_columns['phone'] = col
-                elif '구분' in col_str:
-                    core_columns['category'] = col
                 elif '이메일' in col_str or 'email' in col_str:
                     core_columns['email'] = col
-                elif '가입일' in col_str:
-                    core_columns['join_date'] = col
+                elif '구분' in col_str:
+                    core_columns['category'] = col
+                elif '분야' in col_str:
+                    core_columns['field'] = col
+                elif '기업' in col_str and '단체' in col_str:  # "기업/단체명" 같은 컬럼
+                    core_columns['company'] = col
+                elif '기업' in col_str or '단체' in col_str or '회사' in col_str:
+                    if 'company' not in core_columns:  # 백업용
+                        core_columns['company'] = col
             
             print(f"  핵심 컬럼 매핑: {core_columns}")
             
-            if 'status' not in core_columns:
-                print("  ❌ '상태' 컬럼을 찾을 수 없습니다")
+            if 'status' not in core_columns or 'name' not in core_columns:
+                print("  ❌ '상태' 또는 '이름' 컬럼을 찾을 수 없습니다")
                 return None
             
             # "가입" 상태인 사람들만 필터링
@@ -146,10 +157,10 @@ class MemberExtractor:
             
             # "가입" 키워드가 포함된 행 찾기
             active_members = df[df[status_column].astype(str).str.contains('가입', na=False)]
-            print(f"  '가입' 상태 회원: {len(active_members)}명")
+            print(f"  '가입' 상태 조합원: {len(active_members)}명")
             
             if len(active_members) == 0:
-                print("  ❌ '가입' 상태인 회원이 없습니다")
+                print("  ❌ '가입' 상태인 조합원이 없습니다")
                 return None
             
             # 필요한 데이터만 추출
@@ -166,7 +177,8 @@ class MemberExtractor:
                     '연락처': self.clean_phone(row.get(core_columns.get('phone', ''), '')),
                     '구분': str(row.get(core_columns.get('category', ''), '')).strip(),
                     '이메일': str(row.get(core_columns.get('email', ''), '')).strip(),
-                    '가입일': self.clean_date(row.get(core_columns.get('join_date', ''), '')),
+                    '분야': str(row.get(core_columns.get('field', ''), '')).strip(),
+                    '기업/단체명': self.clean_company_name(row.get(core_columns.get('company', ''), '')),
                     '원본행': idx
                 }
                 
@@ -183,7 +195,20 @@ class MemberExtractor:
                 print(result_df.head(10).to_string(index=False))
                 
                 print(f"\n📊 데이터 요약:")
-                print(f"  총 인원: {len(result_df)}명")
+                print(f"  총 조합원: {len(result_df)}명")
+                
+                # 기업명 보유 통계
+                company_members = result_df[
+                    (result_df['기업/단체명'] != '') & 
+                    (result_df['기업/단체명'] != 'nan') & 
+                    (~result_df['기업/단체명'].isna())
+                ]
+                print(f"  기업명 보유: {len(company_members)}명 ({len(company_members)/len(result_df)*100:.1f}%)")
+                
+                if len(company_members) > 0:
+                    unique_companies = company_members['기업/단체명'].unique()
+                    print(f"  등록된 기업: {len(unique_companies)}개")
+                    print(f"    예시: {list(unique_companies)[:5]}{'...' if len(unique_companies) > 5 else ''}")
                 
                 # 구분별 통계
                 if '구분' in result_df.columns:
@@ -193,15 +218,15 @@ class MemberExtractor:
                         if category and category != 'nan':
                             print(f"    {category}: {count}명")
                 
-                # 연락처 보유 현황
+                # 데이터 완성도
                 phone_count = len(result_df[result_df['연락처'] != ''])
                 email_count = len(result_df[result_df['이메일'] != ''])
-                join_date_count = len(result_df[result_df['가입일'] != ''])
+                company_count = len(company_members)
                 
                 print(f"  데이터 완성도:")
                 print(f"    연락처 보유: {phone_count}/{len(result_df)}명 ({phone_count/len(result_df)*100:.1f}%)")
                 print(f"    이메일 보유: {email_count}/{len(result_df)}명 ({email_count/len(result_df)*100:.1f}%)")
-                print(f"    가입일 보유: {join_date_count}/{len(result_df)}명 ({join_date_count/len(result_df)*100:.1f}%)")
+                print(f"    기업명 보유: {company_count}/{len(result_df)}명 ({company_count/len(result_df)*100:.1f}%)")
             
             return result_df
             
@@ -211,7 +236,7 @@ class MemberExtractor:
             traceback.print_exc()
             return None
     
-    def save_extracted_data(self, df, output_file='extracted_members.csv'):
+    def save_extracted_data(self, df, output_file='extracted_members_with_company.csv'):
         """추출된 데이터 저장"""
         if df is None or df.empty:
             print("❌ 저장할 데이터가 없습니다")
@@ -227,10 +252,10 @@ class MemberExtractor:
 
 def main():
     """메인 실행 함수"""
-    extractor = MemberExtractor()
+    extractor = MemberExtractorWithCompany()
     
-    # 파일 경로
-    member_file = 'utt/조합원_후원자명부.xlsx'
+    # 파일 경로 (기업명 포함 파일)
+    member_file = 'utt/조합원_후원자_기업명.xlsx'
     
     # 파일 존재 확인
     if not os.path.exists(member_file):
@@ -238,21 +263,21 @@ def main():
         return
     
     # 데이터 추출
-    result_df = extractor.extract_member_data(member_file)
+    result_df = extractor.extract_member_data_with_company(member_file)
     
     if result_df is not None and not result_df.empty:
         # 저장
-        extractor.save_extracted_data(result_df, 'extracted_members.csv')
+        extractor.save_extracted_data(result_df, 'extracted_members_with_company.csv')
         
         print(f"\n🎉 데이터 추출 완료!")
         print(f"총 {len(result_df)}명의 '가입' 상태 조합원 데이터를 추출했습니다.")
-        print(f"생성된 파일: extracted_members.csv")
+        print(f"생성된 파일: extracted_members_with_company.csv")
         
-        # 추가 분석 제안
+        # 다음 단계 제안
         print(f"\n📋 다음 단계:")
-        print(f"1. extracted_members.csv 파일 확인")
-        print(f"2. 필요시 데이터 정제")
-        print(f"3. 후원자 명부와 통합")
+        print(f"1. extracted_members_with_company.csv 파일 확인")
+        print(f"2. 기존 extracted_members.csv를 이 파일로 교체")
+        print(f"3. 매칭 시스템에서 기업명 매칭 활용")
         
     else:
         print(f"❌ 추출할 데이터가 없습니다")
